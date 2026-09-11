@@ -1,0 +1,9 @@
+{
+  "name": "DadsEZContainers",
+  "version_number": "0.1.0",
+  "website_url": "https://github.com/DadxIsxBored/DadsEZContainers",
+  "description": "Craft, build, cook, and fuel stations using resources in nearby containers.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2350"
+  ]
+}
