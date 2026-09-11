@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $projectPath = Join-Path $root 'DadsEZContainers.csproj'
 $packageRoot = Join-Path $root 'package'
-$dllPath = Join-Path $root 'bin\Release\net48\DadsEZContainers.dll'
+$dllPath = Join-Path $root 'bin\Release\netstandard2.1\DadsEZContainers.dll'
 
 dotnet build $projectPath -c Release
 

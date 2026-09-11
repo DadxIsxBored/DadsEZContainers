@@ -3,6 +3,8 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CS0168;CS0169;CS8600;CS8602;CS8603;CS8604;CS8618;CS8625</NoWarn>
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>DadsEZContainers</AssemblyName>
     <RootNamespace>DadsEZContainers</RootNamespace>

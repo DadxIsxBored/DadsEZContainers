@@ -427,40 +427,29 @@ static class CheckNearbyForOneIngredientItems
             int requiredAmount = resource.GetAmount(qualityLevel) * craftMultiplier;
 
 
-            int availableAmount = 0;
-            IContainer sourceContainer = null;
+            int playerAmount = __instance.GetInventory().CountItems(reqName);
+            int remainingAmount = Mathf.Max(0, requiredAmount - playerAmount);
+            var plannedConsumptions = new List<Boxes.LaterConsumption>();
+            string itemPrefabName = Utils.GetPrefabName(resource.m_resItem.gameObject);
 
             foreach (IContainer? container in nearbyContainers)
             {
-                int containerAmount = container.ItemCount(reqName);
-                if (containerAmount <= 0)
-                    continue;
-
-                availableAmount += containerAmount;
-
-                if (availableAmount < requiredAmount) continue;
-                sourceContainer = container;
-                break;
+                if (container == null || remainingAmount <= 0) break;
+                if (string.IsNullOrWhiteSpace(container.GetPrefabName()) || !Boxes.CanItemBePulled(container.GetPrefabName(), itemPrefabName)) continue;
+                int availableAmount = Boxes.CheckAndDecrement(container.ItemCount(reqName));
+                if (availableAmount <= 0) continue;
+                int take = Mathf.Min(remainingAmount, availableAmount);
+                plannedConsumptions.Add(new Boxes.LaterConsumption(reqName, take, resource.m_resItem.m_itemData.m_quality, container, resource.m_resItem.m_itemData));
+                remainingAmount -= take;
             }
 
-            if (availableAmount < requiredAmount || sourceContainer == null) continue;
-            if (sourceContainer.GetInventory() == null)
-            {
-                return;
-            }
-
-            ItemDrop.ItemData containerItem = sourceContainer.GetInventory().GetItem(reqName);
-            if (containerItem == null) continue;
-            __result = containerItem;
+            if (remainingAmount > 0 || plannedConsumptions.Count == 0) continue;
+            while (ConsumptionManager.PendingConsumptions.TryTake(out _)) { }
+            __result = resource.m_resItem.m_itemData;
             amount = requiredAmount;
             extraAmount = resource.m_extraAmountOnlyOneIngredient;
-
-            if (__result == null) return;
-            Boxes.LaterConsumption consumption = new(name: reqName, amount: requiredAmount, quality: containerItem.m_quality, sourceContainer: sourceContainer, requiredItem: containerItem);
-            if (ConsumptionManager.PendingConsumptions.IsEmpty)
-            {
+            foreach (Boxes.LaterConsumption consumption in plannedConsumptions)
                 ConsumptionManager.PendingConsumptions.Add(consumption);
-            }
 
             return;
         }
@@ -484,15 +473,8 @@ static class ConsumeLaterConsumptionItemsInventoryGuiDoCraftingPatch
                 continue;
             }
 
-            Inventory? containerInventory = consumption.SourceContainer.GetInventory();
-            if (containerInventory == null)
-            {
-                continue;
-            }
-
-            containerInventory.RemoveItem(consumption.Name, consumption.Amount, consumption.Quality);
-
-
+            consumption.SourceContainer.ProcessContainerInventory(consumption.Name, 0, consumption.Amount);
+            consumption.SourceContainer.Save();
             ConsumptionManager.PendingConsumptions.TryTake(out _);
         }
 

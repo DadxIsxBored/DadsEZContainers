@@ -1,6 +1,6 @@
 {
   "name": "DadsEZContainers",
-  "version_number": "0.1.0",
+  "version_number": "1.0.0",
   "website_url": "https://github.com/DadxIsxBored/DadsEZContainers",
   "description": "Craft, build, cook, and fuel stations using resources in nearby containers.",
   "dependencies": [
