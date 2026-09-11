@@ -1,0 +1,373 @@
+using DadsEZContainers.IContainers;
+using DadsEZContainers.Util.Functions;
+
+namespace DadsEZContainers.Patches;
+
+[HarmonyPatch(typeof(Smelter), nameof(Smelter.OnHoverAddOre))]
+[HarmonyBefore("org.bepinex.plugins.conversionsizespeed")]
+static class SmelterOnHoverAddOrePatch
+{
+    static void Postfix(Smelter __instance, ref string __result)
+    {
+        if (OverrideHoverText.ShouldReturn(__instance))
+        {
+            return;
+        }
+
+        OverrideHoverText.UpdateAddOreSwitchHoverText(__instance, ref __result);
+    }
+}
+
+[HarmonyPatch(typeof(Smelter), nameof(Smelter.OnHoverAddFuel))]
+[HarmonyBefore("org.bepinex.plugins.conversionsizespeed")]
+static class SmelterOnHoverAddFuelPatch
+{
+    static void Postfix(Smelter __instance, ref string __result)
+    {
+        if (OverrideHoverText.ShouldReturn(__instance))
+        {
+            return;
+        }
+
+        OverrideHoverText.UpdateAddWoodSwitchHoverText(__instance, ref __result);
+    }
+}
+
+public static class OverrideHoverText
+{
+    public static bool ShouldReturn(Smelter __instance)
+    {
+        if (MiscFunctions.ShouldPrevent())
+        {
+            return true;
+        }
+
+        if (DadsEZContainersPlugin.fillAllModKey.Value.MainKey is KeyCode.None)
+        {
+            return true;
+        }
+
+        if (Player.m_localPlayer is null)
+        {
+            return true;
+        }
+
+        // Check if the player is looking at an object
+        if (!Player.m_localPlayer.m_hovering || Player.m_localPlayer.m_hovering.GetComponentInParent<Smelter>() != __instance)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    internal static void UpdateAddWoodSwitchHoverText(Smelter __instance, ref string result)
+    {
+        int inInv = GetItemCountInInventoryAndContainers(__instance.m_fuelItem.name, __instance.m_fuelItem.m_itemData.m_shared.m_name, __instance);
+        int amount = Math.Min(__instance.m_maxFuel - Mathf.CeilToInt(__instance.GetFuel()), inInv);
+        __instance.m_fuelItem.m_itemData.m_dropPrefab = __instance.m_fuelItem.gameObject;
+        if (amount > 0)
+        {
+            if (Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), Utils.GetPrefabName(__instance.m_fuelItem.m_itemData.m_dropPrefab)))
+            {
+                result += Localization.instance.Localize($"\n[<b><color=yellow>{DadsEZContainersPlugin.fillAllModKey.Value}</color> + <color=yellow>$KEY_Use</color></b>] $piece_smelter_add {__instance.m_fuelItem.m_itemData.m_shared.m_name} {amount} from Inventory & Nearby Containers");
+            }
+        }
+    }
+
+    internal static void UpdateAddOreSwitchHoverText(Smelter __instance, ref string result)
+    {
+        int free = __instance.m_maxOre - __instance.GetQueueSize();
+        List<string> items = new();
+
+        // Prioritize conversions where the player has items in inventory, matching fill behavior
+        Inventory playerInv = Player.m_localPlayer?.m_inventory;
+        IEnumerable<Smelter.ItemConversion> orderedConversions = playerInv != null
+            ? __instance.m_conversion
+                .OrderByDescending(ic => playerInv.HaveItem(ic.m_from.m_itemData.m_shared.m_name) ? 1 : 0)
+            : __instance.m_conversion;
+
+        foreach (Smelter.ItemConversion conversion in orderedConversions)
+        {
+            if (free <= 0)
+            {
+                break;
+            }
+
+            int inInv = GetItemCountInInventoryAndContainers(conversion.m_from.name, conversion.m_from.m_itemData.m_shared.m_name, __instance);
+            int count = Math.Min(free, inInv);
+            free -= count;
+            if (!MiscFunctions.CheckItemDropIntegrity(conversion.m_from)) continue;
+            conversion.m_from.m_itemData.m_dropPrefab = conversion.m_from.gameObject;
+            if (MiscFunctions.GetItemPrefabFromGameObject(conversion.m_from, conversion.m_from.gameObject) == null) continue;
+            if (count > 0)
+            {
+                if (Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), Utils.GetPrefabName(conversion.m_from.m_itemData.m_dropPrefab)))
+                {
+                    items.Add($"{count} {conversion.m_from.m_itemData.m_shared.m_name}");
+                }
+            }
+        }
+
+        if (items.Count > 0)
+        {
+            result += Localization.instance.Localize($"\n[<b><color=yellow>{DadsEZContainersPlugin.fillAllModKey.Value}</color> + <color=yellow>$KEY_Use</color></b>] {__instance.m_addOreTooltip} {string.Join(", ", items)} from Inventory & Nearby Containers");
+        }
+    }
+
+    private static int GetItemCountInInventoryAndContainers(string prefabName, string itemName, Smelter smelterInstance)
+    {
+        int inInv = Player.m_localPlayer?.m_inventory.CountItems(itemName) ?? 0;
+        List<IContainer> nearbyContainers = Boxes.QueryFrame.Get(smelterInstance, DadsEZContainersPlugin.mRange.Value);
+
+        foreach (IContainer c in nearbyContainers)
+        {
+            if (Boxes.CanItemBePulled(prefabName, c.GetPrefabName()))
+            {
+                c.ContainsItem(itemName, 1, out int result);
+                result = Boxes.CheckAndDecrement(result);
+                inInv += result;
+            }
+        }
+
+        return inInv;
+    }
+}
+
+[HarmonyPatch(typeof(Smelter), nameof(Smelter.QueueOre))]
+static class PreventOverfillJIC_SmelterQueueOrePatch
+{
+    static bool Prefix(Smelter __instance, string name)
+    {
+        return __instance.GetQueueSize() < __instance.m_maxOre;
+    }
+}
+
+[HarmonyPatch(typeof(Smelter), nameof(Smelter.RPC_AddFuel))]
+static class CapFuel_SmelterRPC_AddFuelPatch
+{
+    static bool Prefix(Smelter __instance)
+    {
+        if (!__instance.m_nview.IsOwner()) return true;
+        return !(__instance.GetFuel() >= __instance.m_maxFuel);
+    }
+}
+
+[HarmonyPatch(typeof(Smelter), nameof(Smelter.OnAddOre))]
+static class SmelterOnAddOrePatch
+{
+    [HarmonyPriority(Priority.High)]
+    static bool Prefix(Smelter __instance, Humanoid user, ItemDrop.ItemData item, ZNetView ___m_nview)
+    {
+        int ore = __instance.GetQueueSize();
+        bool pullAll = DadsEZContainersPlugin.fillAllModKey.Value.IsKeyHeld();
+        if (MiscFunctions.ShouldPrevent() || item != null || ore >= __instance.m_maxOre)
+            return true;
+
+        Inventory inventory = user.GetInventory();
+
+
+        if (__instance.m_conversion.Any(itemConversion =>
+            {
+                string itemName = itemConversion?.m_from?.m_itemData?.m_shared?.m_name;
+                return itemName != null && inventory.HaveItem(itemName) && !pullAll && Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), itemConversion.m_from.name);
+            }))
+        {
+            return true;
+        }
+
+
+        Dictionary<string, int> added = new();
+
+        List<IContainer> nearbyContainers = Boxes.QueryFrame.Get(user, DadsEZContainersPlugin.mRange.Value);
+
+        // When filling all (Shift+E), prioritize conversions where the player has the material
+        // in their inventory. This prevents container items from taking priority over inventory
+        // items just because their conversion appears earlier in the list.
+        IEnumerable<Smelter.ItemConversion> orderedConversions = pullAll
+            ? __instance.m_conversion
+                .OrderByDescending(ic => inventory.HaveItem(ic.m_from.m_itemData.m_shared.m_name) ? 1 : 0)
+            : __instance.m_conversion;
+
+        foreach (Smelter.ItemConversion itemConversion in orderedConversions)
+        {
+            if (ore >= __instance.m_maxOre || (added.Any() && !pullAll))
+                break;
+
+            string name = itemConversion.m_from.m_itemData.m_shared.m_name;
+            string prefabName = itemConversion.m_from.name;
+            if (pullAll && inventory.HaveItem(name))
+            {
+                ItemDrop.ItemData newItem = inventory.GetItem(name);
+                if (newItem == null) continue;
+                try
+                {
+                    GameObject itemPrefab = ObjectDB.instance.GetItemPrefab(__instance.m_fuelItem.GetPrefabName(itemConversion.m_from.gameObject.name));
+
+                    newItem.m_dropPrefab = itemPrefab;
+                }
+                catch (Exception e)
+                {
+                    // DadsEZContainersPlugin.DadsEZContainersLogger.LogError(e);
+                }
+
+                if (!newItem.m_dropPrefab) continue;
+                string itemPrefabName = Utils.GetPrefabName(newItem.m_dropPrefab);
+                if (!Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), itemPrefabName))
+                {
+                    DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"(SmelterOnAddOrePatch) debug log 1:  Container at {user.transform.position} has {newItem.m_stack} {newItem.m_dropPrefab.name} but it's forbidden by config");
+                    continue;
+                }
+
+                int amount = pullAll ? Mathf.Min(__instance.m_maxOre - ore, inventory.CountItems(name)) : 1;
+                if (amount <= 0) continue;
+                added.TryAdd(name, 0);
+                added[name] += amount;
+                ore += amount;
+
+                inventory.RemoveItem(itemConversion.m_from.m_itemData.m_shared.m_name, amount);
+
+                for (int i = 0; i < amount; ++i)
+                    ___m_nview.InvokeRPC("RPC_AddOre", newItem.m_dropPrefab.name, newItem.m_cheated);
+
+                user.Message(MessageHud.MessageType.TopLeft, $"$msg_added {amount} {name}");
+                if (ore >= __instance.m_maxOre)
+                    break;
+            }
+
+            if (Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), prefabName))
+            {
+                foreach (IContainer c in nearbyContainers)
+                {
+                    if (!c.ContainsItem(name, 1, out int result)) continue;
+                    result = Boxes.CheckAndDecrement(result);
+                    if (result <= 0) continue;
+                    if (!Boxes.CanItemBePulled(c.GetPrefabName(), prefabName))
+                    {
+                        DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"(SmelterOnAddOrePatch) Container at {c.GetPosition()} has {result} {prefabName} but it's forbidden by config");
+                        continue;
+                    }
+
+                    int amount = pullAll ? Mathf.Min(__instance.m_maxOre - ore, result) : 1;
+                    if (amount <= 0) break;
+
+                    added.TryAdd(name, 0);
+                    added[name] += amount;
+                    ore += amount;
+                    DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"Pull ALL is {pullAll}");
+                    DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"(SmelterOnAddOrePatch) Container at {c.GetPosition()} has {result} {prefabName}, taking {amount}");
+
+                    c.RemoveItem(name, amount);
+                    c.Save();
+
+                    for (int i = 0; i < amount; ++i)
+                        ___m_nview.InvokeRPC("RPC_AddOre", prefabName, false);
+
+                    user.Message(MessageHud.MessageType.TopLeft, $"$msg_added {amount} {name}");
+
+                    if (ore >= __instance.m_maxOre || !pullAll)
+                        break;
+                }
+            }
+        }
+
+        if (!added.Any())
+            user.Message(MessageHud.MessageType.Center, "$msg_noprocessableitems");
+        else
+        {
+            List<string> outAdded = added.Select(kvp => $"$msg_added {kvp.Value} {kvp.Key}").ToList();
+
+            user.Message(MessageHud.MessageType.Center, string.Join("\n", outAdded));
+        }
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(Smelter), nameof(Smelter.OnAddFuel))]
+[HarmonyBefore("org.bepinex.plugins.conversionsizespeed")]
+static class SmelterOnAddFuelPatch
+{
+    static bool Prefix(Smelter __instance, ref bool __result, ZNetView ___m_nview, Humanoid user, ItemDrop.ItemData item)
+    {
+        bool pullAll = DadsEZContainersPlugin.fillAllModKey.Value.IsKeyHeld();
+        Inventory inventory = user.GetInventory();
+        if (MiscFunctions.ShouldPrevent() || item != null || inventory == null ||
+            ((inventory.HaveItem(__instance.m_fuelItem.m_itemData.m_shared.m_name) && !pullAll) && Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), __instance.m_fuelItem.name)))
+            return true;
+
+        __result = true;
+
+        int added = 0;
+
+        float fuel = __instance.GetFuel();
+        if (fuel > __instance.m_maxFuel - 1)
+        {
+            user.Message(MessageHud.MessageType.Center, "$msg_itsfull");
+            __result = false;
+            return false;
+        }
+
+        if (pullAll && inventory.HaveItem(__instance.m_fuelItem.m_itemData.m_shared.m_name))
+        {
+            if (Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), __instance.m_fuelItem.name))
+            {
+                int amount = (int)Mathf.Min(__instance.m_maxFuel - fuel, inventory.CountItems(__instance.m_fuelItem.m_itemData.m_shared.m_name));
+                inventory.RemoveItem(__instance.m_fuelItem.m_itemData.m_shared.m_name, amount);
+                for (int i = 0; i < amount; ++i)
+                    ___m_nview.InvokeRPC("RPC_AddFuel", false);
+
+                added += amount;
+                fuel += amount;
+
+                user.Message(MessageHud.MessageType.TopLeft, Localization.instance.Localize("$msg_fireadding", __instance.m_fuelItem.m_itemData.m_shared.m_name));
+
+                __result = false;
+            }
+        }
+
+        List<IContainer> nearbyContainers = Boxes.QueryFrame.Get(__instance, DadsEZContainersPlugin.mRange.Value);
+        string fuelPrefabName = __instance.m_fuelItem.name;
+        string sharedName = __instance.m_fuelItem.m_itemData.m_shared.m_name;
+        if (Boxes.CanItemBePulled(Utils.GetPrefabName(__instance.gameObject), fuelPrefabName))
+        {
+            foreach (IContainer c in nearbyContainers)
+            {
+                if (!c.ContainsItem(sharedName, 1, out int result)) continue;
+                result = Boxes.CheckAndDecrement(result);
+                if (result <= 0) continue;
+                if (!Boxes.CanItemBePulled(c.GetPrefabName(), fuelPrefabName))
+                {
+                    DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"(SmelterOnAddFuelPatch) Container at {c.GetPosition()} has {result} {sharedName} but it's forbidden by config");
+                    continue;
+                }
+
+                DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"Pull ALL is {pullAll}");
+                int amount = pullAll ? (int)Mathf.Min(__instance.m_maxFuel - fuel, result) : 1;
+                if (amount <= 0) break;
+
+                DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"(SmelterOnAddFuelPatch) Container at {c.GetPosition()} has {result} {sharedName}, taking {amount}");
+
+                c.RemoveItem(sharedName, amount);
+                c.Save();
+
+                for (int i = 0; i < amount; ++i)
+                    ___m_nview.InvokeRPC("RPC_AddFuel", false);
+
+                added += amount;
+                fuel += amount;
+
+                user.Message(MessageHud.MessageType.TopLeft, "$msg_added " + __instance.m_fuelItem.m_itemData.m_shared.m_name);
+
+                __result = false;
+
+                if (!pullAll || Mathf.CeilToInt(fuel) >= __instance.m_maxFuel)
+                    return false;
+            }
+        }
+
+        user.Message(MessageHud.MessageType.Center, added == 0 ? "$msg_noprocessableitems" : $"$msg_added {added} {__instance.m_fuelItem.m_itemData.m_shared.m_name}");
+
+        return __result;
+    }
+}

@@ -1,0 +1,513 @@
+using DadsEZContainers.IContainers;
+using DadsEZContainers.Util.Functions;
+
+namespace DadsEZContainers.Patches;
+
+[HarmonyPatch(typeof(Player), nameof(Player.SetCraftingStation))]
+static class CacheCurrentCraftingStationPrefabName
+{
+    public static string CachedStationName = string.Empty;
+
+    static void Postfix(Player __instance, CraftingStation station)
+    {
+        CachedStationName = station ? Utils.GetPrefabName(station.gameObject) : string.Empty;
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.UpdateKnownRecipesList))]
+static class UpdateKnownRecipesListPatch
+{
+    static void Prefix()
+    {
+        if (MiscFunctions.ShouldPrevent()) return;
+        DadsEZContainersPlugin.skip = true;
+    }
+
+    static void Postfix()
+    {
+        if (MiscFunctions.ShouldPrevent()) return;
+        DadsEZContainersPlugin.skip = false;
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.HaveRequirementItems), new[] { typeof(Recipe), typeof(bool), typeof(int), typeof(int) })]
+static class PlayerHaveRequirementsPatch
+{
+    [HarmonyPriority(Priority.VeryHigh)]
+    static void Postfix(Player __instance, ref bool __result, Recipe piece, bool discover, int qualityLevel, HashSet<string> ___m_knownMaterial, int amount = 1)
+    {
+        try
+        {
+            if (MiscFunctions.ShouldPrevent() || __result || discover)
+                return;
+
+            List<IContainer> nearbyContainers = Boxes.QueryFrame.Get(__instance, DadsEZContainersPlugin.mRange.Value);
+            if (nearbyContainers.Count == 0)
+                return;
+
+            CraftingStation? currentStation = __instance.GetCurrentCraftingStation();
+            bool cando = false;
+            foreach (Piece.Requirement requirement in piece.m_resources)
+            {
+                if (!requirement.m_resItem) continue;
+                if (!MiscFunctions.MatchesStationUpgrader(requirement, currentStation)) continue;
+                bool proceed = MiscFunctions.CheckItemDropIntegrity(requirement.m_resItem);
+                if (!proceed) continue;
+
+                string sharedName = requirement.m_resItem.m_itemData.m_shared.m_name;
+
+                if (piece.m_requireOnlyOneIngredient && !___m_knownMaterial.Contains(sharedName))
+                    continue;
+
+                int requiredAmount = requirement.GetAmount(qualityLevel) * amount;
+                GameObject itemPrefab = MiscFunctions.GetItemPrefabFromGameObject(requirement.m_resItem, requirement.m_resItem.gameObject)!;
+                requirement.m_resItem.m_itemData.m_dropPrefab = requirement.m_resItem.gameObject;
+                if (itemPrefab == null)
+                    continue;
+
+                string itemPrefabName = Utils.GetPrefabName(requirement.m_resItem.name);
+                bool dropPrefabValid = requirement.m_resItem.m_itemData?.m_dropPrefab != null;
+                int bestAcrossQualities = 0;
+
+                if (requirement.m_resItem.m_itemData == null) continue;
+
+                for (int quality = 1; quality <= requirement.m_resItem.m_itemData.m_shared.m_maxQuality; ++quality)
+                {
+                    int invAmountAtQ = __instance.GetInventory().CountItems(sharedName, quality);
+
+                    if (invAmountAtQ >= requiredAmount)
+                    {
+                        bestAcrossQualities = invAmountAtQ;
+                        break;
+                    }
+
+                    int containersTakeableAtQ = 0;
+
+                    if (dropPrefabValid)
+                    {
+                        foreach (IContainer container in nearbyContainers)
+                        {
+                            var containerPrefabName = container.GetPrefabName();
+                            if (Boxes.CanItemBePulled(containerPrefabName, itemPrefabName))
+                            {
+                                container.ContainsItem(sharedName, quality, out int containerAmount);
+                                int takeable = System.Math.Max(0, Boxes.CheckAndDecrement(containerAmount));
+                                if (takeable > 0)
+                                    containersTakeableAtQ += takeable;
+                            }
+
+                            // Stop iterating containers once we have enough at this quality
+                            if (invAmountAtQ + containersTakeableAtQ >= requiredAmount)
+                                break;
+                        }
+                    }
+
+                    int candidateAtQ = invAmountAtQ + containersTakeableAtQ;
+                    if (candidateAtQ > bestAcrossQualities)
+                        bestAcrossQualities = candidateAtQ;
+
+                    // Stop checking further qualities once we have enough
+                    if (bestAcrossQualities >= requiredAmount)
+                        break;
+                }
+
+                if (piece.m_requireOnlyOneIngredient)
+                {
+                    if (bestAcrossQualities >= requiredAmount)
+                    {
+                        cando = true;
+                        break; // Found one valid ingredient, no need to check the rest
+                    }
+                }
+                else if (bestAcrossQualities < requiredAmount)
+                {
+                    return;
+                }
+                else
+                {
+                    cando = true;
+                }
+            }
+
+            if (cando)
+                __result = true;
+        }
+        catch
+        {
+            // Not proud of this, TODO: improve
+        }
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.HaveRequirements), typeof(Recipe), typeof(bool), typeof(int), typeof(int))]
+static class PlayerHaveRequirementsPatchRBoolInt
+{
+    static void Postfix(Player __instance, Recipe recipe, bool discover, int qualityLevel, int amount, ref bool __result)
+    {
+        if (MiscFunctions.ShouldPrevent())
+        {
+            return;
+        }
+
+        if (discover)
+        {
+            if (recipe.m_craftingStation && !__instance.KnowStationLevel(recipe.m_craftingStation.m_name, recipe.m_minStationLevel))
+                return;
+        }
+        else if (!__instance.RequiredCraftingStation(recipe, qualityLevel, true))
+            return;
+
+        bool test = (recipe.m_item.m_itemData.m_shared.m_dlc.Length <= 0 || DLCMan.instance.IsDLCInstalled(recipe.m_item.m_itemData.m_shared.m_dlc)) && HaveRequirementItems(__instance, recipe, discover, qualityLevel, amount);
+        if (test && !__result)
+            __result = true;
+    }
+
+    public static bool HaveRequirementItems(Player p, Recipe piece, bool discover, int qualityLevel, int amountVanilla)
+    {
+        if (p == null)
+            return false;
+
+        List<IContainer>? nearbyContainers = null;
+        CraftingStation? currentStation = p.GetCurrentCraftingStation();
+
+        foreach (Piece.Requirement resource in piece.m_resources)
+        {
+            if (resource.m_resItem && MiscFunctions.MatchesStationUpgrader(resource, currentStation))
+            {
+                if (discover)
+                {
+                    if (resource.m_amount > 0)
+                    {
+                        if (piece.m_requireOnlyOneIngredient)
+                        {
+                            if (p.m_knownMaterial.Contains(resource.m_resItem.m_itemData.m_shared.m_name))
+                                return true;
+                        }
+                        else if (!p.m_knownMaterial.Contains(resource.m_resItem.m_itemData.m_shared.m_name))
+                            return false;
+                    }
+                }
+                else
+                {
+                    string sharedName = resource.m_resItem.m_itemData.m_shared.m_name;
+                    int amount = resource.GetAmount(qualityLevel) * amountVanilla;
+                    int num = p.m_inventory.CountItems(sharedName);
+
+                    // Only check containers if inventory doesn't have enough
+                    if (num < amount)
+                    {
+                        nearbyContainers ??= Boxes.QueryFrame.Get(p, DadsEZContainersPlugin.mRange.Value);
+
+                        resource.m_resItem.m_itemData.m_dropPrefab = resource.m_resItem.gameObject;
+                        if (resource.m_resItem.m_itemData.m_dropPrefab != null)
+                        {
+                            string itemPrefabName = resource.m_resItem.name;
+
+                            foreach (IContainer c in nearbyContainers)
+                            {
+                                if (c == null) continue;
+                                if (string.IsNullOrWhiteSpace(c.GetPrefabName())) continue;
+                                if (!Boxes.CanItemBePulled(c.GetPrefabName(), itemPrefabName)) continue;
+
+                                try
+                                {
+                                    c.ContainsItem(sharedName, 1, out int result);
+                                    result = Boxes.CheckAndDecrement(result);
+                                    num += result;
+                                    if (num >= amount)
+                                        break;
+                                }
+                                catch
+                                {
+                                    // ignored
+                                }
+                            }
+                        }
+                    }
+
+                    if (piece.m_requireOnlyOneIngredient)
+                    {
+                        if (num >= amount)
+                            return true;
+                    }
+                    else if (num < amount)
+                    {
+                        DadsEZContainersPlugin.DadsEZContainersLogger.LogIfReleaseAndDebugEnable($"(HaveRequirements) Short on {sharedName}: {num}/{amount} with {nearbyContainers?.Count ?? 0} containers in range");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return !piece.m_requireOnlyOneIngredient;
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.HaveRequirements), typeof(Piece), typeof(Player.RequirementMode))]
+static class HaveRequirementsPatch2
+{
+    [HarmonyWrapSafe]
+    [HarmonyPriority(Priority.VeryHigh)]
+    static void Postfix(Player __instance, ref bool __result, Piece piece, Player.RequirementMode mode, HashSet<string> ___m_knownMaterial, Dictionary<string, int> ___m_knownStations)
+    {
+        try
+        {
+            if (MiscFunctions.ShouldPrevent() || __result || DadsEZContainersPlugin.skip || __instance?.transform?.position == null)
+                return;
+            if (piece == null)
+                return;
+
+            if (piece.m_craftingStation)
+            {
+                if (mode is Player.RequirementMode.IsKnown or Player.RequirementMode.CanAlmostBuild)
+                {
+                    if (!___m_knownStations.ContainsKey(piece.m_craftingStation.m_name))
+                    {
+                        return;
+                    }
+                }
+                else if (!CraftingStation.HaveBuildStationInRange(piece.m_craftingStation.m_name, __instance.transform.position))
+                {
+                    return;
+                }
+            }
+
+            if (piece.m_dlc.Length > 0 && !DLCMan.instance.IsDLCInstalled(piece.m_dlc))
+            {
+                return;
+            }
+
+            List<IContainer> nearbyContainers = Boxes.QueryFrame.Get(__instance, DadsEZContainersPlugin.mRange.Value);
+
+            foreach (Piece.Requirement requirement in piece.m_resources)
+            {
+                if (requirement.m_resItem == null)
+                    continue;
+                if (requirement.m_resItem && requirement.m_amount > 0)
+                {
+                    if (!MiscFunctions.CheckItemDropIntegrity(requirement.m_resItem))
+                        continue;
+                    requirement.m_resItem.m_itemData.m_dropPrefab = requirement.m_resItem.gameObject;
+                    if (requirement.m_resItem.m_itemData.m_dropPrefab == null)
+                        continue;
+                    switch (mode)
+                    {
+                        case Player.RequirementMode.IsKnown
+                            when !___m_knownMaterial.Contains(requirement.m_resItem.m_itemData.m_shared.m_name):
+                            return;
+                        case Player.RequirementMode.CanAlmostBuild when __instance.GetInventory().HaveItem(requirement.m_resItem.m_itemData.m_shared.m_name):
+                            continue;
+                        case Player.RequirementMode.CanAlmostBuild:
+                        {
+                            bool hasItem = false;
+                            string sharedName = requirement.m_resItem.m_itemData.m_shared.m_name;
+                            foreach (IContainer c in nearbyContainers)
+                            {
+                                requirement.m_resItem.m_itemData.m_dropPrefab = requirement.m_resItem.gameObject;
+                                if (requirement.m_resItem.m_itemData.m_dropPrefab == null)
+                                    continue;
+                                string itemPrefabName = Utils.GetPrefabName(requirement.m_resItem.m_itemData.m_dropPrefab);
+                                bool canItemBePulled = Boxes.CanItemBePulled(c.GetPrefabName(), itemPrefabName);
+
+                                if (canItemBePulled && c.ContainsItem(sharedName, 1, out _))
+                                {
+                                    hasItem = true;
+                                    break;
+                                }
+                            }
+
+                            if (!hasItem)
+                                return;
+                            break;
+                        }
+                        case Player.RequirementMode.CanBuild when __instance.GetInventory().CountItems(requirement.m_resItem.m_itemData.m_shared.m_name) < requirement.m_amount:
+                        {
+                            int hasItems = __instance.GetInventory().CountItems(requirement.m_resItem.m_itemData.m_shared.m_name);
+                            foreach (IContainer c in nearbyContainers)
+                            {
+                                requirement.m_resItem.m_itemData.m_dropPrefab = requirement.m_resItem.gameObject;
+                                if (requirement.m_resItem.m_itemData.m_dropPrefab == null)
+                                    continue;
+                                string itemPrefabName = requirement.m_resItem.name;
+                                string sharedName = requirement.m_resItem.m_itemData.m_shared.m_name;
+                                bool canItemBePulled = Boxes.CanItemBePulled(c.GetPrefabName(), itemPrefabName);
+
+                                if (canItemBePulled)
+                                {
+                                    try
+                                    {
+                                        c.ContainsItem(sharedName, 1, out int result);
+                                        result = Boxes.CheckAndDecrement(result);
+                                        hasItems += result;
+                                        if (hasItems >= requirement.m_amount)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    catch
+                                    {
+// ignored
+                                    }
+                                }
+                            }
+
+                            if (hasItems < requirement.m_amount)
+                                return;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            __result = true;
+        }
+        catch
+        {
+        }
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.ConsumeResources))]
+static class ConsumeResourcesPatch
+{
+    static bool Prefix(Player __instance, Piece.Requirement[] requirements, int qualityLevel, int itemQuality = -1, int multiplier = 1)
+    {
+        try
+        {
+            if (MiscFunctions.ShouldPrevent())
+            {
+                return true;
+            }
+
+            Inventory pInventory = __instance.GetInventory();
+            List<IContainer> nearbyContainers = Boxes.QueryFrame.Get(__instance, DadsEZContainersPlugin.mRange.Value);
+            MiscFunctions.ProcessRequirements(requirements, qualityLevel, pInventory, nearbyContainers, itemQuality, multiplier, __instance.GetCurrentCraftingStation());
+        }
+        catch (Exception ex)
+        {
+            DadsEZContainersPlugin.DadsEZContainersLogger.LogError($"Error in ConsumeResourcesPatch: {ex.Message}");
+        }
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.GetFirstRequiredItem))]
+static class CheckNearbyForOneIngredientItems
+{
+    static void Postfix(Player __instance, Inventory inventory, Recipe recipe, int qualityLevel, ref int amount, ref int extraAmount, int craftMultiplier, ref ItemDrop.ItemData __result)
+    {
+        if (MiscFunctions.ShouldPrevent())
+        {
+            return;
+        }
+
+        if (__result != null)
+        {
+            return;
+        }
+
+
+        List<IContainer> nearbyContainers = Boxes.QueryFrame.Get(__instance, DadsEZContainersPlugin.mRange.Value);
+        if (nearbyContainers == null || nearbyContainers.Count == 0)
+        {
+            return;
+        }
+
+        CraftingStation? currentStation = __instance.GetCurrentCraftingStation();
+
+        foreach (Piece.Requirement resource in recipe.m_resources)
+        {
+            if (!resource.m_resItem)
+                continue;
+            if (!MiscFunctions.MatchesStationUpgrader(resource, currentStation))
+                continue;
+
+            string reqName = resource.m_resItem.m_itemData.m_shared.m_name;
+            int requiredAmount = resource.GetAmount(qualityLevel) * craftMultiplier;
+
+
+            int availableAmount = 0;
+            IContainer sourceContainer = null;
+
+            foreach (IContainer? container in nearbyContainers)
+            {
+                int containerAmount = container.ItemCount(reqName);
+                if (containerAmount <= 0)
+                    continue;
+
+                availableAmount += containerAmount;
+
+                if (availableAmount < requiredAmount) continue;
+                sourceContainer = container;
+                break;
+            }
+
+            if (availableAmount < requiredAmount || sourceContainer == null) continue;
+            if (sourceContainer.GetInventory() == null)
+            {
+                return;
+            }
+
+            ItemDrop.ItemData containerItem = sourceContainer.GetInventory().GetItem(reqName);
+            if (containerItem == null) continue;
+            __result = containerItem;
+            amount = requiredAmount;
+            extraAmount = resource.m_extraAmountOnlyOneIngredient;
+
+            if (__result == null) return;
+            Boxes.LaterConsumption consumption = new(name: reqName, amount: requiredAmount, quality: containerItem.m_quality, sourceContainer: sourceContainer, requiredItem: containerItem);
+            if (ConsumptionManager.PendingConsumptions.IsEmpty)
+            {
+                ConsumptionManager.PendingConsumptions.Add(consumption);
+            }
+
+            return;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.DoCrafting))]
+static class ConsumeLaterConsumptionItemsInventoryGuiDoCraftingPatch
+{
+    static void Postfix(InventoryGui __instance)
+    {
+        if (MiscFunctions.ShouldPrevent())
+        {
+            return;
+        }
+
+        foreach (Boxes.LaterConsumption? consumption in ConsumptionManager.PendingConsumptions.ToList())
+        {
+            if (consumption.SourceContainer == null)
+            {
+                continue;
+            }
+
+            Inventory? containerInventory = consumption.SourceContainer.GetInventory();
+            if (containerInventory == null)
+            {
+                continue;
+            }
+
+            containerInventory.RemoveItem(consumption.Name, consumption.Amount, consumption.Quality);
+
+
+            ConsumptionManager.PendingConsumptions.TryTake(out _);
+        }
+
+        while (!ConsumptionManager.PendingConsumptions.IsEmpty)
+        {
+            ConsumptionManager.PendingConsumptions.TryTake(out _);
+        }
+    }
+}
+
+[HarmonyPatch(typeof(Game), nameof(Game.Logout))]
+static class GameLogoutPatch
+{
+    static void Prefix(Game __instance)
+    {
+        DadsEZContainersPlugin.lastPosition = Vector3.zero;
+    }
+}
