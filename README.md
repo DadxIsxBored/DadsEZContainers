@@ -2,6 +2,8 @@
 
 DadsEZContainers is an independently implemented nearby-container resource system for Valheim 1.0.12. It uses current Valheim container, crafting, building, and processing-station APIs and has its own identifiers, configuration, rules parser, and assets.
 
+The dropped-item pickup delay is configurable from `0.1` through `10.0` seconds in one-decimal increments. Its default is the vanilla `0.5` seconds.
+
 ## Core behavior
 
 - Craft and upgrade using items in accessible containers within range.

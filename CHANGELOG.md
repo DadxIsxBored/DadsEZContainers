@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- Added a configurable dropped-item pickup delay.
+- Added a restricted range from `0.1` through `10.0` seconds.
+- Added automatic one-decimal normalization for the pickup-delay value.
+
 ## 1.0.0
 
 - Completed the AzuCraftyBoxes-compatible feature set for Valheim 1.0.12.

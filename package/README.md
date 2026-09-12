@@ -2,6 +2,8 @@
 
 DadsEZContainers lets Valheim 1.0.12 crafting, building, cooking, fires, kilns, and smelters use resources stored in nearby containers.
 
+The dropped-item pickup delay can be configured from `0.1` through `10.0` seconds in one-decimal increments. The default is `0.5` seconds.
+
 ## Features
 
 - Counts nearby container contents in crafting and building requirements.

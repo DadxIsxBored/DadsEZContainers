@@ -18,7 +18,7 @@ namespace DadsEZContainers
     public class DadsEZContainersPlugin : BaseUnityPlugin
     {
         internal const string ModName = "DadsEZContainers";
-        internal const string ModVersion = "1.0.0";
+        internal const string ModVersion = "1.1.0";
         internal const string Author = "Dad_Is_Bored";
         private const string ModGUID = "com.dadisbored.dadsezcontainers";
         private static string ConfigFileName = $"{ModGUID}.cfg";
@@ -76,6 +76,16 @@ namespace DadsEZContainers
                     SE_ContainerPull.CheckAndSetStatusEffect(Player.m_localPlayer);
             };
             mRange = config("2 - CraftyBoxes", "Container Range", 20f, "The maximum range from which to pull items from.");
+            pickupDelay = config(
+                "2 - CraftyBoxes",
+                "Pickup Delay",
+                0.5f,
+                new ConfigDescription(
+                    "Delay in seconds before a newly dropped item can be picked up. Values are restricted to 0.1 through 10.0 seconds and rounded to one decimal place.",
+                    new AcceptableValueRange<float>(0.1f, 10.0f)),
+                false);
+            NormalizePickupDelay();
+            pickupDelay.SettingChanged += (_, _) => NormalizePickupDelay();
             leaveOne = config("2 - CraftyBoxes", "Leave One Item", Toggle.Off, new ConfigDescription("* If on, leaves one item in the chest when pulling from it, so that you are able to pull from it again and store items more easily with other mods. (Such as AzuAutoStore or QuickStackStore). If off, it will pull all items from the chest.", null, new ConfigurationManagerAttributes() { Order = 2 }));
             resourceString = TextEntryConfig("2 - CraftyBoxes", "ResourceCostString", "{0}/{1}", new ConfigDescription("String used to show required and available resources. {0} is replaced by how much is available, and {1} is replaced by how much is required. Set to nothing to leave it as default.", null, new ConfigurationManagerAttributes() { Order = 1 }), false);
             flashColor = config("2 - CraftyBoxes", "FlashColor", Color.yellow, "Resource amounts will flash to this colour when coming from containers", false);
@@ -357,6 +367,34 @@ namespace DadsEZContainers
         public static ConfigEntry<string> preventPullingStringFormat = null!;
         public static ConfigEntry<Toggle> preventPullingStatusEffectDisplay = null!;
         public static ConfigEntry<float> mRange = null!;
+        public static ConfigEntry<float> pickupDelay = null!;
+        private static bool _normalizingPickupDelay;
+
+        internal static float PickupDelaySeconds => Mathf.Round(Mathf.Clamp(pickupDelay.Value, 0.1f, 10.0f) * 10f) / 10f;
+
+        private static void NormalizePickupDelay()
+        {
+            if (_normalizingPickupDelay)
+            {
+                return;
+            }
+
+            float normalized = PickupDelaySeconds;
+            if (Mathf.Approximately(pickupDelay.Value, normalized))
+            {
+                return;
+            }
+
+            _normalizingPickupDelay = true;
+            try
+            {
+                pickupDelay.Value = normalized;
+            }
+            finally
+            {
+                _normalizingPickupDelay = false;
+            }
+        }
 
         private ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
         {

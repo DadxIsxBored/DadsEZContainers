@@ -1,8 +1,8 @@
 {
   "name": "DadsEZContainers",
-  "version_number": "1.0.0",
+  "version_number": "1.1.0",
   "website_url": "https://github.com/DadxIsxBored/DadsEZContainers",
-  "description": "Craft, build, cook, and fuel stations using resources in nearby containers.",
+  "description": "Use nearby-container resources and configure dropped-item pickup delay for Valheim 1.0.12.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2350"
   ]
