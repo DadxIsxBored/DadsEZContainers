@@ -8,7 +8,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>DadsEZContainers</AssemblyName>
     <RootNamespace>DadsEZContainers</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <Deterministic>true</Deterministic>
     <DebugType>portable</DebugType>

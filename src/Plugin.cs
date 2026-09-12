@@ -18,7 +18,7 @@ namespace DadsEZContainers
     public class DadsEZContainersPlugin : BaseUnityPlugin
     {
         internal const string ModName = "DadsEZContainers";
-        internal const string ModVersion = "1.1.0";
+        internal const string ModVersion = "1.1.1";
         internal const string Author = "Dad_Is_Bored";
         private const string ModGUID = "com.dadisbored.dadsezcontainers";
         private static string ConfigFileName = $"{ModGUID}.cfg";

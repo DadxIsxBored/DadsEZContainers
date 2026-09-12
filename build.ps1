@@ -41,11 +41,23 @@ if ($Package) {
     $assemblySemVer = "$($assemblyVersion.Major).$($assemblyVersion.Minor).$($assemblyVersion.Build)"
     if ($assemblySemVer -ne $manifest.version_number) { throw "Assembly version $assemblySemVer differs from manifest version $($manifest.version_number)." }
 
+    $dist = Join-Path $root 'dist'
+    $archiveRoot = Join-Path $root 'Archive\package-builds'
+    New-Item -ItemType Directory -Path $dist -Force | Out-Null
+    New-Item -ItemType Directory -Path $archiveRoot -Force | Out-Null
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-    $stage = Join-Path $root "dist\DadsEZContainers-$($manifest.version_number)-$stamp"
+    foreach ($artifact in Get-ChildItem -LiteralPath $dist -Force) {
+        $archiveName = if ($artifact.PSIsContainer) {
+            "$($artifact.Name)-$stamp"
+        }
+        else {
+            "$($artifact.BaseName)-$stamp$($artifact.Extension)"
+        }
+        Move-Item -LiteralPath $artifact.FullName -Destination (Join-Path $archiveRoot $archiveName)
+    }
+
+    $stage = Join-Path $dist "DadsEZContainers-$($manifest.version_number)"
     $zipPath = "$stage.zip"
-    if (Test-Path -LiteralPath $stage) { throw "Stage already exists: $stage" }
-    if (Test-Path -LiteralPath $zipPath) { throw "ZIP already exists: $zipPath" }
     New-Item -ItemType Directory -Path $stage | Out-Null
     Copy-Item -LiteralPath $dllPath -Destination $stage
     Copy-Item -LiteralPath $manifestPath -Destination $stage
